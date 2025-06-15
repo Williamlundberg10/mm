@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Remote Desktop</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter&display=swap');
+  body, html {
+    margin: 0; padding: 0; height: 100%; background: #111; color: #eee;
+    font-family: 'Inter', sans-serif;
+    display: flex; flex-direction: column;
+  }
+  header {
+    background: #222;
+    padding: 10px;
+    display: flex;
+    align-items: center;
+  }
+  header > * {
+    margin-right: 15px;
+  }
+  select, button {
+    background: #333; border: none; color: #eee; padding: 8px 12px;
+    border-radius: 5px; font-size: 1rem;
+    cursor: pointer;
+  }
+  select:focus, button:focus {
+    outline: 2px solid #5599ff;
+  }
+  #monitor-tabs {
+    flex-grow: 1;
+  }
+  #monitor-tabs button {
+    background: #444;
+    margin-right: 5px;
+  }
+  #monitor-tabs button.active {
+    background: #5599ff;
+  }
+  #fullscreen-btn {
+    background: #333;
+  }
+  #remote-screen {
+    flex-grow: 1;
+    background: black;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    overflow: hidden;
+  }
+  #remote-screen img {
+    max-width: 100%;
+    max-height: 100%;
+    user-select: none;
+    -webkit-user-drag: none;
+  }
+</style>
+</head>
+<body>
+<header>
+  <div id="monitor-tabs"></div>
+  <button id="fullscreen-btn">Toggle Fullscreen</button>
+</header>
+<div id="remote-screen">
+  <img id="screen-img" src="" alt="Remote Screen" />
+</div>
+
+<script>
+// ========== CONFIG ==========
+const BACKEND_URL = 'http://192.168.56.1:5000';  // <--- Change this to your Flask server URL
+
+const monitorTabs = document.getElementById('monitor-tabs');
+const img = document.getElementById('screen-img');
+const fullscreenBtn = document.getElementById('fullscreen-btn');
+
+let monitors = [];
+let selectedMonitor = 1;
+
+async function fetchMonitors() {
+  const res = await fetch(`${BACKEND_URL}/monitors`);
+  monitors = await res.json();
+  monitorTabs.innerHTML = '';
+  monitors.forEach(m => {
+    const btn = document.createElement('button');
+    btn.textContent = 'Monitor ' + m.id;
+    btn.classList.toggle('active', m.id === selectedMonitor);
+    btn.onclick = () => {
+      selectedMonitor = m.id;
+      updateStream();
+      updateTabs();
+    };
+    monitorTabs.appendChild(btn);
+  });
+}
+
+function updateTabs() {
+  [...monitorTabs.children].forEach(btn => {
+    btn.classList.toggle('active', btn.textContent.endsWith(selectedMonitor.toString()));
+  });
+}
+
+function updateStream() {
+  img.src = `${BACKEND_URL}/stream/${selectedMonitor}`;
+}
+
+fullscreenBtn.onclick = () => {
+  if (!document.fullscreenElement) {
+    document.documentElement.requestFullscreen();
+  } else {
+    document.exitFullscreen();
+  }
+};
+
+function getRelativeCoords(e) {
+  const rect = img.getBoundingClientRect();
+  return {
+    x: e.clientX - rect.left,
+    y: e.clientY - rect.top,
+  };
+}
+
+async function sendPost(url, data) {
+  try {
+    await fetch(url, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(data),
+      mode: 'cors'  // make sure CORS is allowed by backend!
+    });
+  } catch (err) {
+    console.error('Request failed', err);
+  }
+}
+
+img.addEventListener('mousemove', async (e) => {
+  const coords = getRelativeCoords(e);
+  const m = monitors.find(m => m.id === selectedMonitor);
+  if (!m) return;
+  const rect = img.getBoundingClientRect();
+  const scaledX = coords.x / rect.width * m.width + m.x;
+  const scaledY = coords.y / rect.height * m.height + m.y;
+  await sendPost(`${BACKEND_URL}/mouse/move`, {x: scaledX, y: scaledY});
+});
+
+img.addEventListener('mousedown', async (e) => {
+  e.preventDefault();
+  const button = e.button === 0 ? 'left' : e.button === 2 ? 'right' : 'middle';
+  await sendPost(`${BACKEND_URL}/mouse/down`, {button});
+});
+
+img.addEventListener('mouseup', async (e) => {
+  e.preventDefault();
+  const button = e.button === 0 ? 'left' : e.button === 2 ? 'right' : 'middle';
+  await sendPost(`${BACKEND_URL}/mouse/up`, {button});
+});
+
+img.addEventListener('contextmenu', e => e.preventDefault());
+
+img.addEventListener('wheel', async (e) => {
+  e.preventDefault();
+  await sendPost(`${BACKEND_URL}/mouse/scroll`, {dx: 0, dy: e.deltaY > 0 ? -120 : 120});
+}, {passive: false});
+
+document.addEventListener('keydown', async (e) => {
+  if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) return;
+  e.preventDefault();
+  await sendPost(`${BACKEND_URL}/keyboard`, {key: e.key, action: 'down'});
+});
+
+document.addEventListener('keyup', async (e) => {
+  if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) return;
+  e.preventDefault();
+  await sendPost(`${BACKEND_URL}/keyboard`, {key: e.key, action: 'up'});
+});
+
+fetchMonitors().then(updateStream);
+</script>
+</body>
+</html>
